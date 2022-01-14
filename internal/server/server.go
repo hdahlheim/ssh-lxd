@@ -4,12 +4,16 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"strconv"
 
+	"github.com/gorilla/websocket"
 	lxd "github.com/lxc/lxd/client"
 	"github.com/lxc/lxd/shared/api"
 
 	"github.com/gliderlabs/ssh"
 )
+
+var iLS = &intLXDServer{}
 
 func Run() int {
 	certFile := os.Getenv("LXD_CLIENT_CERT")
@@ -26,31 +30,37 @@ func Run() int {
 		return 1
 	}
 
-	iLS := &intLXDServer{
+	iLS = &intLXDServer{
 		URL:           os.Getenv("LXD_HOST_URL"),
 		TLSClientCert: string(cert),
 		TLSClientKey:  string(key),
 	}
 
-	ssh.Handle(func(s ssh.Session) {
-		instance := s.User()
-		log.Println(iLS.connect(instance, s))
-
-		// authorizedKey := gossh.MarshalAuthorizedKey(s.PublicKey())
-		// io.WriteString(s, fmt.Sprintf("public key used by %s:\n", s.User()))
-		// s.Write(authorizedKey)
-	})
+	s := ssh.Server{
+		Addr:    ":6666",
+		Handler: sessionHandler,
+	}
 
 	// publicKeyOption := ssh.PublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) bool {
 	// 	return true // allow all keys, or use ssh.KeysEqual() to compare against known keys
 	// })
 
 	log.Println("starting server on :6666")
-	if err := ssh.ListenAndServe(":6666", nil); err != nil {
+	if err := s.ListenAndServe(); err != nil {
 		log.Println(err)
 		return 1
 	}
 	return 0
+}
+
+func sessionHandler(s ssh.Session) {
+	instance := s.User()
+	log.Println()
+	log.Println(iLS.connect(instance, s))
+
+	// authorizedKey := gossh.MarshalAuthorizedKey(s.PublicKey())
+	// io.WriteString(s, fmt.Sprintf("public key used by %s:\n", s.User()))
+	// s.Write(authorizedKey)
 }
 
 type intLXDServer struct {
@@ -83,11 +93,27 @@ func (iLS *intLXDServer) connect(instance string, s ssh.Session) error {
 		},
 	}
 
+	_, windowChannel, _ := s.Pty()
+
 	// Setup the exec arguments
 	args := lxd.ContainerExecArgs{
 		Stdin:  s,
 		Stdout: s,
 		Stderr: s,
+		Control: func(conn *websocket.Conn) {
+			for window := range windowChannel {
+				req := api.InstanceExecControl{}
+				req.Command = "window-resize"
+				req.Args = map[string]string{
+					"width":  strconv.Itoa(window.Width),
+					"height": strconv.Itoa(window.Height),
+				}
+
+				if err := conn.WriteJSON(req); err != nil {
+					log.Panicln(err)
+				}
+			}
+		},
 	}
 
 	// Get the current state
