@@ -3,9 +3,9 @@ package main
 import (
 	"os"
 
-	"github.com/hdahlheim/ssh-lxd/internal/server"
+	"github.com/hdahlheim/ssh-lxd/cmd"
 )
 
 func main() {
-	os.Exit(server.Run())
+	os.Exit(cmd.Run())
 }

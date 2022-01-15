@@ -1,132 +1,61 @@
 package server
 
 import (
-	"io/ioutil"
 	"log"
 	"os"
-	"strconv"
-
-	"github.com/gorilla/websocket"
-	lxd "github.com/lxc/lxd/client"
-	"github.com/lxc/lxd/shared/api"
 
 	"github.com/gliderlabs/ssh"
+	"github.com/hdahlheim/ssh-lxd/internal/config"
 )
 
-var iLS = &intLXDServer{}
+var cfg *config.Config
 
-func Run() int {
-	certFile := os.Getenv("LXD_CLIENT_CERT")
-	cert, err := ioutil.ReadFile(certFile)
-	if err != nil {
-		log.Println(certFile)
-		log.Println(err)
-		return 1
-	}
+func Run(c *config.Config) error {
+	cfg = c
 
-	key, err := ioutil.ReadFile(os.Getenv("LXD_CLIENT_KEY"))
-	if err != nil {
-		log.Println(err)
-		return 1
-	}
-
-	iLS = &intLXDServer{
-		URL:           os.Getenv("LXD_HOST_URL"),
-		TLSClientCert: string(cert),
-		TLSClientKey:  string(key),
+	if err := initLXDClient(); err != nil {
+		return err
 	}
 
 	s := ssh.Server{
-		Addr:    ":6666",
-		Handler: sessionHandler,
+		Addr:             ":6666",
+		Handler:          sessionHandler,
+		PublicKeyHandler: authHandler,
+		PasswordHandler:  nil,
 	}
 
-	// publicKeyOption := ssh.PublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) bool {
-	// 	return true // allow all keys, or use ssh.KeysEqual() to compare against known keys
-	// })
-
-	log.Println("starting server on :6666")
-	if err := s.ListenAndServe(); err != nil {
-		log.Println(err)
-		return 1
+	// use hostkey file if set
+	if path := os.Getenv("HOST_KEY_FILE"); path != "" {
+		s.SetOption(ssh.HostKeyFile(path))
 	}
-	return 0
+
+	log.Println("Starting server on", s.Addr)
+
+	return s.ListenAndServe()
 }
 
 func sessionHandler(s ssh.Session) {
 	instance := s.User()
-	log.Println()
-	log.Println(iLS.connect(instance, s))
 
-	// authorizedKey := gossh.MarshalAuthorizedKey(s.PublicKey())
-	// io.WriteString(s, fmt.Sprintf("public key used by %s:\n", s.User()))
-	// s.Write(authorizedKey)
+	if err := connectToShell(instance, s); err != nil {
+		log.Println(err)
+	}
 }
 
-type intLXDServer struct {
-	URL           string
-	TLSClientCert string
-	TLSClientKey  string
-}
+func authHandler(ctx ssh.Context, key ssh.PublicKey) bool {
+	user := ctx.User()
 
-func (iLS *intLXDServer) connect(instance string, s ssh.Session) error {
-	// Connect to LXD over the HTTPS
-	c, err := lxd.ConnectLXD(iLS.URL, &lxd.ConnectionArgs{
-		InsecureSkipVerify: true,
-		TLSClientCert:      iLS.TLSClientCert,
-		TLSClientKey:       iLS.TLSClientKey,
-	})
-	if err != nil {
-		return err
+	var passed bool
+	for _, keyStr := range cfg.Auth[user].Keys {
+		authKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(keyStr))
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+
+		if passed = ssh.KeysEqual(key, authKey); passed {
+			break
+		}
 	}
-
-	// Setup the exec request
-	req := api.ContainerExecPost{
-		Command:     []string{"bash"},
-		WaitForWS:   true,
-		Interactive: true,
-		Width:       80,
-		Height:      60,
-		Environment: map[string]string{
-			"PATH": ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-			"TERM": "xterm",
-		},
-	}
-
-	_, windowChannel, _ := s.Pty()
-
-	// Setup the exec arguments
-	args := lxd.ContainerExecArgs{
-		Stdin:  s,
-		Stdout: s,
-		Stderr: s,
-		Control: func(conn *websocket.Conn) {
-			for window := range windowChannel {
-				req := api.InstanceExecControl{}
-				req.Command = "window-resize"
-				req.Args = map[string]string{
-					"width":  strconv.Itoa(window.Width),
-					"height": strconv.Itoa(window.Height),
-				}
-
-				if err := conn.WriteJSON(req); err != nil {
-					log.Panicln(err)
-				}
-			}
-		},
-	}
-
-	// Get the current state
-	op, err := c.ExecContainer(instance, req, &args)
-	if err != nil {
-		return err
-	}
-
-	// Wait for it to complete
-	err = op.Wait()
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return passed
 }

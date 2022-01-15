@@ -24,3 +24,4 @@ go.work
 dist/*
 
 .env
+config.yaml
