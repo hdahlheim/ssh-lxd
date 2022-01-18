@@ -22,7 +22,13 @@ func Run(c *config.Config) error {
 		Handler:          sessionHandler,
 		PublicKeyHandler: authHandler,
 		PasswordHandler:  nil,
+		Version:          "OpenSSH_7.6p1",
+		SubsystemHandlers: map[string]ssh.SubsystemHandler{
+			"sftp": sftpHandler,
+		},
 	}
+
+	// s.SubsystemHandlers["sftp"] = sftpHandler
 
 	// use hostkey file if set
 	if path := os.Getenv("HOST_KEY_FILE"); path != "" {
@@ -42,7 +48,20 @@ func sessionHandler(s ssh.Session) {
 	}
 }
 
+func sftpHandler(s ssh.Session) {
+	log.Println("sftp session:", s)
+	log.Println("sftp user:", s.User())
+	instance := s.User()
+	log.Println("instance:", instance)
+
+	if err := connectToSftp(instance, s); err != nil {
+		log.Println(err)
+	}
+}
+
 func authHandler(ctx ssh.Context, key ssh.PublicKey) bool {
+	log.Println("ctx user:", ctx.User())
+	log.Println("key:", key)
 	user := ctx.User()
 
 	var passed bool
@@ -57,5 +76,6 @@ func authHandler(ctx ssh.Context, key ssh.PublicKey) bool {
 			break
 		}
 	}
+	log.Println("login passed:", passed)
 	return passed
 }

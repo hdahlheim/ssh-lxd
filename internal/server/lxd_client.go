@@ -18,8 +18,7 @@ var lxdClient lxd.InstanceServer
 func initLXDClient() error {
 	url := os.Getenv("LXD_HOST_URL")
 
-	certFile := os.Getenv("LXD_CLIENT_CERT")
-	cert, err := ioutil.ReadFile(certFile)
+	cert, err := ioutil.ReadFile(os.Getenv("LXD_CLIENT_CERT"))
 	if err != nil {
 		return err
 	}
@@ -82,11 +81,12 @@ func connectToShell(instance string, s ssh.Session) error {
 		Stderr: s,
 		Control: func(conn *websocket.Conn) {
 			for window := range windowChanges {
-				req := api.InstanceExecControl{}
-				req.Command = "window-resize"
-				req.Args = map[string]string{
-					"width":  strconv.Itoa(window.Width),
-					"height": strconv.Itoa(window.Height),
+				req := api.InstanceExecControl{
+					Command: "window-resize",
+					Args: map[string]string{
+						"width":  strconv.Itoa(window.Width),
+						"height": strconv.Itoa(window.Height),
+					},
 				}
 
 				if err := conn.WriteJSON(req); err != nil {
@@ -94,6 +94,37 @@ func connectToShell(instance string, s ssh.Session) error {
 				}
 			}
 		},
+	}
+
+	// Get the current state
+	op, err := lxdClient.ExecInstance(instance, req, &args)
+	if err != nil {
+		return err
+	}
+
+	// Wait for it to complete
+	err = op.Wait()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func connectToSftp(instance string, s ssh.Session) error {
+	// Setup the exec request. we expect the that the container is a ubuntu linux. maybe we make this configurable i the future...
+	req := api.InstanceExecPost{
+		Command:   []string{"/usr/lib/openssh/sftp-server", "-e", "-d", "/home/ubuntu"},
+		WaitForWS: true,
+		User:      1000, // user ubuntu
+		Group:     1000, // group ubuntu
+	}
+
+	// Setup the exec arguments
+	args := lxd.InstanceExecArgs{
+		Stdin:  s,
+		Stdout: s,
+		Stderr: s,
 	}
 
 	// Get the current state

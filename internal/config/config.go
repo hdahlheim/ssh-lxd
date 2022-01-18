@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"io/ioutil"
 
 	"gopkg.in/yaml.v3"
@@ -20,10 +21,12 @@ func GetConfig() *Config {
 	return &cfg
 }
 
+var ErrConfigNotFound = errors.New("config not found")
+
 func LoadConfig() error {
-	raw, err := ioutil.ReadFile("./config.yaml")
+	raw, err := ioutil.ReadFile("config.yaml")
 	if err != nil {
-		return err
+		return ErrConfigNotFound
 	}
 
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
